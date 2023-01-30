@@ -3,15 +3,21 @@ package com.newrelic.agent;
 import java.io.IOException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.logging.Level;
 
-import org.json.simple.parser.JSONParser;
-import org.json.simple.parser.ParseException;
+import org.apache.http.client.methods.CloseableHttpResponse;
+import org.apache.http.client.methods.HttpPost;
+import org.apache.http.entity.StringEntity;
+import org.apache.http.impl.client.CloseableHttpClient;
+import org.apache.http.impl.client.HttpClients;
+import org.json.simple.JSONAware;
 
 import com.newrelic.agent.config.IBMUtils;
 import com.newrelic.agent.config.SystemPropertyFactory;
 import com.newrelic.agent.discovery.AgentArguments;
 import com.newrelic.agent.discovery.StatusClient;
 import com.newrelic.agent.discovery.StatusMessage;
+import com.newrelic.agent.logging.IAgentLogger;
 import com.newrelic.agent.service.ServiceManager;
 import com.newrelic.bootstrap.BootstrapAgent;
 
@@ -33,39 +39,64 @@ public class LifecycleObserver {
     }
 
     public boolean isAgentSafe() {
-        return true;
+        return !(IBMUtils.isIbmJVM() &&
+            !Boolean.parseBoolean(SystemPropertyFactory.getSystemPropertyProvider()
+                .getSystemProperty(BootstrapAgent.TRY_IBM_ATTACH_SYSTEM_PROPERTY)));
     }
 
-    public static LifecycleObserver createLifecycleObserver(String agentArgs) {
-        if (agentArgs != null && !agentArgs.isEmpty()) {
+    public static LifecycleObserver createLifecycleObserver(IAgentLogger LOG, final AgentArguments args) {
+        if (args.getServerPort() != null || args.getEndpoint() != null) {
             try {
-                final AgentArguments args = AgentArguments.fromJsonObject(new JSONParser().parse(agentArgs));
-                final Number port = args.getServerPort();
-                final StatusClient client = StatusClient.create(port.intValue());
-                client.write(StatusMessage.info(args.getId(), "Msg", "Initializing agent"));
-                return new AttachLifecycleObserver(client, args);
-            } catch (ParseException | IOException e) {
-                // ignore
+                final MessageWriter messageWriter;
+                if (args.getEndpoint() != null) {
+                    messageWriter = message -> postMessageAsJson(args.getEndpoint(), message);
+                } else {
+                    final StatusClient client = StatusClient.create(args.getServerPort().intValue());
+                    messageWriter = client::write;
+                }
+
+                messageWriter.write(StatusMessage.info(args.getId(), "Msg", "Initializing agent"));
+                return new AttachLifecycleObserver(messageWriter, args);
+            } catch (IOException e) {
+                LOG.log(Level.SEVERE, e, e.getMessage());
             }
         }
         return new LifecycleObserver();
     }
 
-    private static class AttachLifecycleObserver extends LifecycleObserver {
+    private static void postMessageAsJson(String endpoint, JSONAware value)
+      throws IOException {
 
-        private final StatusClient client;
+        final String json = value.toJSONString();
+
+        final HttpPost httpPost = new HttpPost(endpoint);
+        httpPost.setHeader("Content-Type", "application/json");
+        httpPost.setHeader("Accept", "application/json");
+        httpPost.setEntity(new StringEntity(json));
+
+        try (CloseableHttpClient client = HttpClients.createDefault()) {
+            CloseableHttpResponse response = (CloseableHttpResponse) client
+                .execute(httpPost);
+        }
+    }
+
+    private interface MessageWriter {
+        void write(StatusMessage message) throws IOException;
+    }
+
+    private static class AttachLifecycleObserver extends LifecycleObserver {
         private final AtomicReference<ServiceManager> serviceManager = new AtomicReference<>();
         private final String id;
+        private final MessageWriter messageWriter;
 
-        public AttachLifecycleObserver(StatusClient client, AgentArguments args) {
-            this.client = client;
+        public AttachLifecycleObserver(MessageWriter messageWriter, AgentArguments args) {
             this.id = args.getId();
+            this.messageWriter = messageWriter;
         }
 
+        @Override
         public boolean isAgentSafe() {
-            if (IBMUtils.isIbmJVM() && 
-                    !Boolean.parseBoolean(SystemPropertyFactory.getSystemPropertyProvider()
-                            .getSystemProperty(BootstrapAgent.TRY_IBM_ATTACH_SYSTEM_PROPERTY))) {
+            if (!super.isAgentSafe()) {
                 writeMessage(StatusMessage.error(id, "Error",
                         "The agent attach feature is not supported for IBM JVMs"));
                 return false;
@@ -116,7 +147,7 @@ public class LifecycleObserver {
         private void writeMessage(StatusMessage message) {
             try {
                 System.out.println(message);
-                client.write(message);
+                messageWriter.write(message);
             } catch (IOException e) {
                 // ignore
             }

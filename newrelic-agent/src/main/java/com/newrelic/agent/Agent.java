@@ -27,6 +27,7 @@ import com.newrelic.agent.util.asm.ClassStructure;
 import com.newrelic.bootstrap.BootstrapLoader;
 import com.newrelic.weave.utils.Streams;
 import org.objectweb.asm.ClassReader;
+import com.newrelic.agent.discovery.AgentArguments;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -119,10 +120,23 @@ public final class Agent {
      */
     @SuppressWarnings("unused")
     public static void continuePremain(String agentArgs, Instrumentation inst, long startTime) {
-        final LifecycleObserver lifecycleObserver = LifecycleObserver.createLifecycleObserver(agentArgs);
+        final AgentArguments args = AgentArguments.fromArgumentsString(agentArgs);
+        final LifecycleObserver lifecycleObserver = LifecycleObserver.createLifecycleObserver(LOG, args);
         if (!lifecycleObserver.isAgentSafe()) {
             return;
         }
+        if (args.isStartAsync()) {
+            // we can asynchronously communicate the attach status.  blocking agentmain ties up threads in the
+            // calling attach client
+            new Thread(() -> {
+                doContinuePremain(inst, startTime, lifecycleObserver);
+            }).run();
+        } else {
+            doContinuePremain(inst, startTime, lifecycleObserver);
+        }
+    }
+
+    public static void doContinuePremain(Instrumentation inst, long startTime, final LifecycleObserver lifecycleObserver) {
         // This *MUST* be done first thing in the premain
         addMixinInterfacesToBootstrap(inst);
 

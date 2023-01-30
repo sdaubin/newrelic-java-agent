@@ -7,9 +7,6 @@
 
 package com.newrelic.agent.config;
 
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
-
 public class IBMUtils {
     private static final String IBM_VENDOR = "IBM Corporation";
 

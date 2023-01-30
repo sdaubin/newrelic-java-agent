@@ -4,13 +4,18 @@ import java.io.IOException;
 import java.io.ObjectInput;
 import java.io.ObjectOutput;
 import java.io.Serializable;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Objects;
 import java.util.logging.Level;
 
-public class StatusMessage implements Serializable, Externalizable {
+import org.json.simple.JSONAware;
+import org.json.simple.JSONObject;
+
+public class StatusMessage implements Serializable, Externalizable, JSONAware {
     // we use the RPM url as an indication of a successful attach operation
     private static final String URL_LABEL = "Url";
-    static final long serialVersionUID = -1921492641455922593L;
+    public static final long serialVersionUID = -1921492641455922593L;
 
     private final String id;
     private final Level level;
@@ -59,6 +64,16 @@ public class StatusMessage implements Serializable, Externalizable {
     @Override
     public String toString() {
         return TerminalColor.fromLevel(level).formatMessage(label, message);
+    }
+
+    @Override
+    public String toJSONString() {
+        Map<String, String> map = new HashMap<>();
+        map.put("id", id);
+        map.put("message", message);
+        map.put("label", label);
+        map.put("level", level.getName());
+        return JSONObject.toJSONString(map);
     }
 
     /**
